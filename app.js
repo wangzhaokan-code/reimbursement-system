@@ -172,13 +172,13 @@ function matrixValue(target,subjectId,role,perms,invites){
   if(target.kind==='user')return perms.some(p=>p.user_id===target.id&&p.expense_subject_id===subjectId&&p.role===role&&p.is_active);
   return invites.some(i=>i.normalized_email===target.email&&i.expense_subject_id===subjectId&&i.role===role&&i.is_active&&!i.accepted_user_id);
 }
-function permissionMatrixHtml(target,perms,invites){
+function permissionMatrixHtmlV1(target,perms,invites){
   if(!target)return '';
   const rows=state.subjects.map(subject=>`<tr><th>${esc(subject.display_name)}${subject.is_active?'':' <span class="muted">（已停用）</span>'}</th>${Object.keys(ROLE_LABELS).map(role=>`<td><input type="checkbox" data-matrix-subject="${subject.id}" data-matrix-role="${role}" ${matrixValue(target,subject.id,role,perms,invites)?'checked':''}></td>`).join('')}</tr>`).join('');
   const emailField=target.kind==='pending'&&target.isNew?'<label>Google邮箱 <input id="matrixEmail" type="email" placeholder="name@example.com" required></label>':'';
   return `<section class="permission-editor"><div class="toolbar"><h3>${target.kind==='user'?`编辑权限：${esc(target.label)}`:target.isNew?'新增人员权限矩阵':`为 ${esc(target.email)} 设置权限`}</h3><button id="matrixCancel">取消</button></div>${emailField}<table class="table matrix"><thead><tr><th>费用归属主体</th>${Object.values(ROLE_LABELS).map(label=>`<th>${label}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table><button class="primary" id="matrixSave">保存权限</button></section>`;
 }
-async function savePermissionMatrix(target,perms,invites){
+async function savePermissionMatrixV1(target,perms,invites){
   const selected=[...app.querySelectorAll('[data-matrix-subject]:checked')].map(input=>({expense_subject_id:input.dataset.matrixSubject,role:input.dataset.matrixRole}));
   if(target.kind==='user'){
     await rpc('manage_user_subject_permissions',{p_user_id:target.id,p_permissions:selected});
