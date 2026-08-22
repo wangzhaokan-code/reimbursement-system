@@ -183,6 +183,7 @@ async function savePermissionMatrixV1(target,perms,invites){
   const selected=[...app.querySelectorAll('[data-matrix-subject]:checked')].map(input=>({expense_subject_id:input.dataset.matrixSubject,role:input.dataset.matrixRole}));
   if(target.kind==='user'){
     await rpc('manage_user_subject_permissions',{p_user_id:target.id,p_permissions:selected});
+
   }else{
     if(target.isNew){target.email=String(document.querySelector('#matrixEmail')?.value||'').trim().toLowerCase();if(!target.email||!target.email.includes('@'))throw new Error('请输入有效的 Google 邮箱');}
     const existing=invites.filter(i=>i.normalized_email===target.email);
