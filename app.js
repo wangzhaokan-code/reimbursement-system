@@ -45,8 +45,9 @@ async function loadSession(){ const {data}=await supabase.auth.getSession(); sta
   supabase.from('user_subject_permission').select('*,expense_subject(*)').eq('user_id',userId).eq('is_active',true),
   supabase.from('expense_subject').select('*').order('subject_code'),
   supabase.from('reimbursement_claim').select('*,expense_subject(*),evidence_file(*)').order('updated_at',{ascending:false}),
-  supabase.rpc('list_manageable_people')
- ]); state.profile=profile.data; state.permissions=perms.data||[]; state.subjects=subjects.data||[]; state.people=people.data||{users:[],invitations:[]}; const knownPeople=state.people.users||[]; state.claims=(claims.data||[]).map(claim=>({...claim,applicant:{display_name:knownPeople.find(person=>person.id===claim.applicant_user_id)?.short_name||knownPeople.find(person=>person.id===claim.applicant_user_id)?.full_name||knownPeople.find(person=>person.id===claim.applicant_user_id)?.display_name||knownPeople.find(person=>person.id===claim.applicant_user_id)?.email||'未知人员'}})); identity.innerHTML=`<span>${esc(state.profile?.short_name||state.profile?.display_name||state.session.user.email)}</span> <button id="logout">退出</button>`; document.querySelector('#logout')?.addEventListener('click',()=>supabase.auth.signOut()); return true; }
+  supabase.rpc('list_manageable_people'),
+  supabase.from('user_subject_permission').select('*').eq('is_active',true)
+ ]); state.profile=profile.data; state.permissions=perms.data||[]; state.subjects=subjects.data||[]; state.people=people.data||{users:[],invitations:[]}; const manageablePermissions=managedPermissions.data||[]; state.people.users=(state.people.users||[]).map(person=>({...person,permissions:manageablePermissions.filter(permission=>permission.user_id===person.id)})); const knownPeople=state.people.users||[]; state.claims=(claims.data||[]).map(claim=>({...claim,applicant:{display_name:knownPeople.find(person=>person.id===claim.applicant_user_id)?.short_name||knownPeople.find(person=>person.id===claim.applicant_user_id)?.full_name||knownPeople.find(person=>person.id===claim.applicant_user_id)?.display_name||knownPeople.find(person=>person.id===claim.applicant_user_id)?.email||'未知人员'}})); identity.innerHTML=`<span>${esc(state.profile?.short_name||state.profile?.display_name||state.session.user.email)}</span> <button id="logout">退出</button>`; document.querySelector('#logout')?.addEventListener('click',()=>supabase.auth.signOut()); return true; }
 function applicationRootUrl(){ const path=location.pathname.endsWith('/')?location.pathname:location.pathname.slice(0,location.pathname.lastIndexOf('/')+1); return `${location.origin}${path}`; }
 function renderLogin(){ identity.textContent=''; app.innerHTML=`<section class="card"><h1>登录公司业务管理平台</h1><p>仅允许已获得主体权限的 Google 账号访问。</p><button class="primary" id="login">使用 Google 登录</button><p class="muted">数据按数据库权限隔离，凭证文件仅向授权人员开放。</p></section>`; document.querySelector('#login').onclick=()=>supabase.auth.signInWithOAuth({provider:'google',options:{redirectTo:applicationRootUrl()}}); }
 function allowedSubjects(){ const ids=new Set(state.permissions.map(p=>p.expense_subject_id)); return state.subjects.filter(s=>ids.has(s.id)); }
@@ -324,3 +325,32 @@ renderAdmin = function(){
     state.subjects = allSubjects;
   }
 };
+
+// 通过现有 RLS 读取可见权限，再与受控人员目录合并，避免把权限范围交给前端猜测。
+loadSession = async function(){
+  const {data}=await supabase.auth.getSession();
+  state.session=data.session;
+  if(!state.session){renderLogin();return false;}
+  try{await supabase.rpc('activate_user_access');}catch(error){console.error('activate_user_access',error);}
+  const userId=state.session.user.id;
+  const [profile,perms,subjects,claims,people,visiblePermissions]=await Promise.all([
+    supabase.from('user_profile').select('*').eq('id',userId).maybeSingle(),
+    supabase.from('user_subject_permission').select('*,expense_subject(*)').eq('user_id',userId).eq('is_active',true),
+    supabase.from('expense_subject').select('*').order('subject_code'),
+    supabase.from('reimbursement_claim').select('*,expense_subject(*),evidence_file(*)').order('updated_at',{ascending:false}),
+    supabase.rpc('list_manageable_people'),
+    supabase.from('user_subject_permission').select('*').eq('is_active',true)
+  ]);
+  state.profile=profile.data;
+  state.permissions=perms.data||[];
+  state.subjects=subjects.data||[];
+  state.people=people.data||{users:[],invitations:[]};
+  const visible=visiblePermissions.data||[];
+  state.people.users=(state.people.users||[]).map(person=>({...person,permissions:visible.filter(permission=>permission.user_id===person.id)}));
+  const knownPeople=state.people.users||[];
+  state.claims=(claims.data||[]).map(claim=>({...claim,applicant:{display_name:knownPeople.find(person=>person.id===claim.applicant_user_id)?.short_name||knownPeople.find(person=>person.id===claim.applicant_user_id)?.full_name||knownPeople.find(person=>person.id===claim.applicant_user_id)?.display_name||knownPeople.find(person=>person.id===claim.applicant_user_id)?.email||'未知人员'}}));
+  identity.innerHTML='<span>'+esc(state.profile?.short_name||state.profile?.display_name||state.session.user.email)+'</span> <button id="logout">退出</button>';
+  document.querySelector('#logout')?.addEventListener('click',()=>supabase.auth.signOut());
+  return true;
+};
+loadSession().then(render);
