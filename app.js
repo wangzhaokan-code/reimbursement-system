@@ -281,7 +281,7 @@ function permissionMatrixHtml(target,perms,invites,visibleSubjects){
     return '<tr><th>'+esc(subject.display_name)+(subject.is_active?'':' <span class="muted">（已停用）</span>')+'</th>'+cells+'</tr>';
   }).join('');
   const targetInvite=target.kind==='pending'&&target.email?invites.find(invite=>invite.normalized_email===target.email):null;
-  const fields=target.kind==='pending'?'<div class="admin-form"><label>Gmail<input id="matrixEmail" type="email" value="'+esc(target.email||'')+'" placeholder="@gmail.com" '+(target.isNew?'':'readonly')+' required></label><label>人员简称<input id="matrixShortName" value="'+esc(targetInvite?.short_name||'')+'" required></label><label>人员姓名<input id="matrixFullName" value="'+esc(targetInvite?.full_name||'')+'" required></label></div>':'';
+  const fields=target.kind==='pending'?'<div class="admin-form"><label>Gmail<input id="matrixEmail" type="email" value="'+esc(target.email||'')+'" placeholder="XXXX@gmail.com" '+(target.isNew?'':'readonly')+' required></label><label>人员简称<input id="matrixShortName" value="'+esc(targetInvite?.short_name||'')+'" required></label><label>人员姓名<input id="matrixFullName" value="'+esc(targetInvite?.full_name||'')+'" required></label></div>':'';
   return '<section class="permission-editor"><div class="toolbar"><h3>'+ (target.kind==='user'?'编辑权限：'+esc(target.label):target.isNew?'新增人员权限矩阵':'为 '+esc(target.email)+' 设置权限') +'</h3><button id="matrixCancel">取消</button></div>'+fields+'<table class="table matrix"><thead><tr><th>费用归属主体</th>'+Object.values(ROLE_LABELS).map(label=>'<th>'+label+'</th>').join('')+'</tr></thead><tbody>'+rows+'</tbody></table><button class="primary" id="matrixSave">保存权限</button></section>';
 }
 async function savePermissionMatrix(target,perms,invites,visibleSubjects){
@@ -355,3 +355,12 @@ loadSession = async function(){
   return true;
 };
 loadSession().then(render);
+
+// 主体编辑表单不显示示例占位文字，避免与实际字段值混淆。
+const _renderSystemAdminWithoutSubjectExamples = renderSystemAdmin;
+renderSystemAdmin = async function(){
+  await _renderSystemAdminWithoutSubjectExamples();
+  for (const fieldName of ['subject_code', 'display_name', 'short_name']) {
+    document.querySelector('#subjectForm [name="' + fieldName + '"]')?.removeAttribute('placeholder');
+  }
+};
