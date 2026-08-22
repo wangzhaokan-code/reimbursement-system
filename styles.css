@@ -3,6 +3,7 @@
 .permission-editor{margin:1rem 0;padding:1rem;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc}.matrix th,.matrix td{text-align:center;vertical-align:middle}.matrix th:first-child{text-align:left;min-width:12rem}.matrix input[type=checkbox]{width:1.15rem;height:1.15rem}
 .permission-summary{white-space:pre-line;line-height:1.7}
 .slot{grid-template-columns:70px 190px 220px minmax(200px,1fr)}
+.file-head{grid-template-columns:80px minmax(180px,1fr) 110px 90px auto}
 .slot-date input[type=date]{width:150px}
 .slot-note{min-width:0}
 .slot-note input{min-width:0}
