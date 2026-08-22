@@ -94,8 +94,18 @@ async function saveCurrent(allowCreate=true){
   state.busy=true;
   state.saving=true;
   try{
-    const c=state.selectedClaim;
-    const result=await rpc('autosave_reimbursement_claim',{p_claim_id:c.id,p_expected_version:c.version,p_expense_subject_id:c.expense_subject_id});
+    let c=state.selectedClaim;
+    let result;
+    try{
+      result=await rpc('autosave_reimbursement_claim',{p_claim_id:c.id,p_expected_version:c.version,p_expense_subject_id:c.expense_subject_id});
+    }catch(error){
+      if(!isVersionConflict(error))throw error;
+      const latest=await reloadClaimVersion(c.id);
+      if(!latest)throw error;
+      c={...latest,expense_subject_id:state.selectedClaim.expense_subject_id||latest.expense_subject_id};
+      state.selectedClaim=c;
+      result=await rpc('autosave_reimbursement_claim',{p_claim_id:c.id,p_expected_version:c.version,p_expense_subject_id:c.expense_subject_id});
+    }
     state.selectedClaim={...c,...result};
     state.dirty=false;
     state.saving=false;
