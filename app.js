@@ -196,7 +196,7 @@ async function savePermissionMatrix(target,perms,invites){
     }
   }
 }
-async function renderSystemAdmin(){
+async function renderSystemAdminV1(){
   if(!state.profile?.is_platform_admin){state.mode='list';render();return;}
   const [usersRes,permsRes,invitesRes]=await Promise.all([
     supabase.from('user_profile').select('*').order('email'),
