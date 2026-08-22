@@ -328,6 +328,7 @@ renderAdmin = function(){
 
 // 通过现有 RLS 读取可见权限，再与受控人员目录合并，避免把权限范围交给前端猜测。
 loadSession = async function(){
+  state.message=null;
   const {data}=await supabase.auth.getSession();
   state.session=data.session;
   if(!state.session){renderLogin();return false;}
