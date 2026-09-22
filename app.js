@@ -8,6 +8,7 @@ const STATUS_LABELS = { draft:'草稿', submitted:'已提交', returned:'已退�
 const FILE_KINDS = new Set(['image','pdf']);
 const state = { session:null, profile:null, subjects:[], permissions:[], claims:[], people:{users:[],invitations:[]}, mode:'list', selectedClaim:null, message:null, busy:false, dirty:false, saving:false, adminFilters:{subject:'',status:'',claimNumber:'',from:'',to:'',kind:'all',sort:'updated_desc'} };
 const slotSaveTimers = new Map();
+let libheifModulePromise=null;
 let activePreviewSession = 0;
 
 window.addEventListener('beforeunload', event=>{
@@ -165,6 +166,37 @@ function imagePdfFromCanvas(canvas){const jpeg=Uint8Array.from(atob(canvas.toDat
 function downloadPdf(filename,lines){const canvas=document.createElement('canvas');canvas.width=1400;canvas.height=Math.max(500,lines.length*48+80);const ctx=canvas.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#111';ctx.font='30px -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif';lines.forEach((line,index)=>ctx.fillText(String(line),40,60+index*48));const url=URL.createObjectURL(imagePdfFromCanvas(canvas));const a=document.createElement('a');a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function downloadClaimPdf(claim){const s=stats(claim);const lines=[`公司业务管理平台｜申请 ${claim.claim_number}`,`主体：${claim.expense_subject?.display_name||'—'}`,`申请人：${claim.applicant?.display_name||state.profile?.display_name||'—'}`,`状态：${statusLabel(claim.status)}`,`文件数：${s.files}　收据数：${s.receipts}`,`提交时间：${dateTime(claim.submitted_at)}`,...claimFiles(claim).flatMap(f=>rows(f).filter(complete).map((r,i)=>`文件${f.file_order||''} 收据${i+1}　${r.expense_date}　${yen(r.amount)}　备注：${r.note||'—'}`)),`总额：${yen(claim.total_amount||s.amount)}`];downloadPdf(`${claim.claim_number}.pdf`,lines);}
 function downloadDashboardPdf(claims){const f=state.adminFilters;const normal=claims.filter(c=>!c.correction_amount&&c.status!=='voided');const increase=claims.filter(c=>c.correction_amount&&c.correction_amount>0).reduce((s,c)=>s+Number(c.correction_amount),0);const decrease=claims.filter(c=>c.correction_amount&&c.correction_amount<0).reduce((s,c)=>s+Math.abs(Number(c.correction_amount)),0);const original=normal.reduce((s,c)=>s+Number(c.total_amount||0),0);const voided=claims.filter(c=>c.status==='voided');const lines=['公司业务管理平台｜当前筛选结果',`筛选：主体=${f.subject||'全部'} 状态=${f.status?statusLabel(f.status):'全部'} 类型=${f.kind}`,`排序：${f.sort}`,`原始金额：${yen(original)}　增加：${yen(increase)}　减少：${yen(decrease)}`,`经营净额：${yen(original+increase-decrease)}`,`作废申请数：${voided.length}　作废原金额：${yen(voided.reduce((s,c)=>s+Number(c.total_amount||0),0))}`,...claims.map(c=>`${c.claim_number}　${c.expense_subject?.display_name||'—'}　${statusLabel(c.status)}　${yen(c.total_amount)}`)];downloadPdf('当前筛选结果.pdf',lines);}
+async function convertHeicWithLibheif(blob){
+  if(typeof window.libheif!=='function')throw new Error('LIBHEIF_DECODER_UNAVAILABLE');
+  if(!libheifModulePromise)libheifModulePromise=window.libheif();
+  const libheif=await libheifModulePromise;
+  const decoder=new libheif.HeifDecoder();
+  const images=decoder.decode(new Uint8Array(await blob.arrayBuffer()));
+  if(!images?.length)throw new Error('LIBHEIF_NO_IMAGES');
+  const image=images[0];
+  const width=image.get_width();
+  const height=image.get_height();
+  const canvas=document.createElement('canvas');
+  canvas.width=width;
+  canvas.height=height;
+  const context=canvas.getContext('2d');
+  const imageData=context.createImageData(width,height);
+  await new Promise((resolve,reject)=>image.display(imageData,result=>result?resolve():reject(new Error('LIBHEIF_DISPLAY_FAILED'))));
+  context.putImageData(imageData,0,0);
+  return await new Promise((resolve,reject)=>canvas.toBlob(result=>result?resolve(result):reject(new Error('LIBHEIF_ENCODE_FAILED')),'image/jpeg',.92));
+}
+async function convertHeic(blob){
+  if(typeof window.heic2any==='function'){
+    try{
+      const converted=await window.heic2any({blob,toType:'image/jpeg',quality:.92});
+      const convertedBlob=Array.isArray(converted)?converted[0]:converted;
+      if(convertedBlob instanceof Blob)return convertedBlob;
+    }catch(error){
+      console.warn('heic2any不支持该HEIC，切换libheif',error);
+    }
+  }
+  return await convertHeicWithLibheif(blob);
+}
 async function previewEvidence(file){
   if(!file?.storage_path){flash('凭证路径不可用','error');return;}
   const modal=document.querySelector('#previewModal');
@@ -199,10 +231,7 @@ async function previewEvidence(file){
     originalUrl=URL.createObjectURL(result.data);
     let displayUrl=originalUrl;
     if(isHeic){
-      if(typeof window.heic2any!=='function')throw new Error('HEIC_DECODER_UNAVAILABLE');
-      const converted=await window.heic2any({blob:result.data,toType:'image/jpeg',quality:.92});
-      const convertedBlob=Array.isArray(converted)?converted[0]:converted;
-      if(!(convertedBlob instanceof Blob))throw new Error('HEIC_CONVERSION_EMPTY');
+      const convertedBlob=await convertHeic(result.data);
       convertedUrl=URL.createObjectURL(convertedBlob);
       displayUrl=convertedUrl;
     }
