@@ -8,6 +8,7 @@ const STATUS_LABELS = { draft:'草稿', submitted:'已提交', returned:'已退�
 const FILE_KINDS = new Set(['image','pdf']);
 const state = { session:null, profile:null, subjects:[], permissions:[], claims:[], people:{users:[],invitations:[]}, mode:'list', selectedClaim:null, message:null, busy:false, dirty:false, saving:false, adminFilters:{subject:'',status:'',claimNumber:'',from:'',to:'',kind:'all',sort:'updated_desc'} };
 const slotSaveTimers = new Map();
+let activePreviewSession = 0;
 
 window.addEventListener('beforeunload', event=>{
   if(state.dirty || state.saving){
@@ -166,18 +167,54 @@ function downloadClaimPdf(claim){const s=stats(claim);const lines=[`公司业务
 function downloadDashboardPdf(claims){const f=state.adminFilters;const normal=claims.filter(c=>!c.correction_amount&&c.status!=='voided');const increase=claims.filter(c=>c.correction_amount&&c.correction_amount>0).reduce((s,c)=>s+Number(c.correction_amount),0);const decrease=claims.filter(c=>c.correction_amount&&c.correction_amount<0).reduce((s,c)=>s+Math.abs(Number(c.correction_amount)),0);const original=normal.reduce((s,c)=>s+Number(c.total_amount||0),0);const voided=claims.filter(c=>c.status==='voided');const lines=['公司业务管理平台｜当前筛选结果',`筛选：主体=${f.subject||'全部'} 状态=${f.status?statusLabel(f.status):'全部'} 类型=${f.kind}`,`排序：${f.sort}`,`原始金额：${yen(original)}　增加：${yen(increase)}　减少：${yen(decrease)}`,`经营净额：${yen(original+increase-decrease)}`,`作废申请数：${voided.length}　作废原金额：${yen(voided.reduce((s,c)=>s+Number(c.total_amount||0),0))}`,...claims.map(c=>`${c.claim_number}　${c.expense_subject?.display_name||'—'}　${statusLabel(c.status)}　${yen(c.total_amount)}`)];downloadPdf('当前筛选结果.pdf',lines);}
 async function previewEvidence(file){
   if(!file?.storage_path){flash('凭证路径不可用','error');return;}
+  const modal=document.querySelector('#previewModal');
+  if(!modal){flash('凭证预览区域不可用','error');return;}
+  const previewSession=++activePreviewSession;
+  const bucket=file.storage_bucket||'reimbursement-evidence';
+  const fileName=String(file.original_filename||'').toLowerCase();
+  const mimeType=String(file.mime_type||file.content_type||'').toLowerCase();
+  const isPdf=(file.file_kind==='pdf'||mimeType==='application/pdf');
+  const isHeic=!isPdf&&(['image/heic','image/heif'].includes(mimeType)||/\.(heic|heif)$/.test(fileName));
+  let originalUrl='';
+  let convertedUrl='';
+  const releaseUrls=()=>{
+    if(originalUrl)URL.revokeObjectURL(originalUrl);
+    if(convertedUrl)URL.revokeObjectURL(convertedUrl);
+    originalUrl='';
+    convertedUrl='';
+  };
+  const closePreview=()=>{
+    activePreviewSession++;
+    releaseUrls();
+    modal.hidden=true;
+    modal.innerHTML='';
+  };
+  modal.hidden=false;
+  modal.innerHTML='<div class="preview-backdrop"><div class="preview-panel"><button class="preview-close">关闭</button><p class="muted">凭证加载中…</p></div></div>';
+  modal.querySelector('.preview-close').onclick=closePreview;
   try{
-    const bucket=file.storage_bucket||'reimbursement-evidence';
     const result=await supabase.storage.from(bucket).download(file.storage_path);
     if(result.error)throw result.error;
-    const url=URL.createObjectURL(result.data);
-    const modal=document.querySelector('#previewModal');
-    if(!modal){URL.revokeObjectURL(url);return;}
-    const isPdf=(file.file_kind==='pdf'||file.mime_type==='application/pdf');
-    modal.hidden=false;
-    modal.innerHTML=`<div class="preview-backdrop"><div class="preview-panel"><button class="preview-close">关闭</button>${isPdf?`<iframe title="凭证PDF预览" src="${url}"></iframe>`:`<img alt="凭证预览" src="${url}">`}</div></div>`;
-    modal.querySelector('.preview-close').onclick=()=>{URL.revokeObjectURL(url);modal.hidden=true;modal.innerHTML='';};
-  }catch(error){console.error('凭证预览失败',error);flash('凭证暂时无法打开，请刷新后重试','error');}
+    if(previewSession!==activePreviewSession)return;
+    originalUrl=URL.createObjectURL(result.data);
+    let displayUrl=originalUrl;
+    if(isHeic){
+      if(typeof window.heic2any!=='function')throw new Error('HEIC_DECODER_UNAVAILABLE');
+      const converted=await window.heic2any({blob:result.data,toType:'image/jpeg',quality:.92});
+      const convertedBlob=Array.isArray(converted)?converted[0]:converted;
+      if(!(convertedBlob instanceof Blob))throw new Error('HEIC_CONVERSION_EMPTY');
+      convertedUrl=URL.createObjectURL(convertedBlob);
+      displayUrl=convertedUrl;
+    }
+    if(previewSession!==activePreviewSession){releaseUrls();return;}
+    modal.innerHTML=`<div class="preview-backdrop"><div class="preview-panel"><button class="preview-close">关闭</button>${isPdf?`<iframe title="凭证PDF预览" src="${displayUrl}"></iframe>`:`<img alt="凭证预览" src="${displayUrl}">`}</div></div>`;
+    modal.querySelector('.preview-close').onclick=closePreview;
+  }catch(error){
+    console.error('凭证预览失败',error);
+    if(previewSession!==activePreviewSession){releaseUrls();return;}
+    modal.innerHTML=`<div class="preview-backdrop"><div class="preview-panel"><button class="preview-close">关闭</button><p class="notice error">${isHeic?'此HEIC凭证暂时无法预览':'凭证暂时无法打开，请刷新后重试'}</p><a class="button-link" href="${originalUrl||'#'}" target="_blank" rel="noopener">打开原文件</a><a class="button-link" href="${originalUrl||'#'}" download>下载原文件</a></div></div>`;
+    modal.querySelector('.preview-close').onclick=closePreview;
+  }
 }
 function downloadAdminClaimsCsv(claims){downloadCsv('当前筛选申请.csv',[['申请编号','主体','状态','金额','提交日期'],...claims.map(c=>[c.claim_number,c.expense_subject?.display_name,statusLabel(c.status),Number(c.total_amount||0),c.submitted_at?.slice(0,10)?.replaceAll('-','')||''])]);}
 function downloadAdminReceiptsCsv(claims){const out=[['申请编号','主体','文件序号','收据序号','日期','金额','备注']];claims.forEach(c=>claimFiles(c).forEach(f=>rows(f).filter(complete).forEach((r,i)=>out.push([c.claim_number,c.expense_subject?.display_name,f.file_order,i+1,r.expense_date.replaceAll('-',''),Number(r.amount),r.note||'']))));downloadCsv('当前筛选收据明细.csv',out);}
