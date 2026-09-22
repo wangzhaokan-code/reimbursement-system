@@ -211,7 +211,7 @@ async function previewEvidence(file){
     modal.querySelector('.preview-close').onclick=closePreview;
   }catch(error){
     const detail=error instanceof Error?{name:error.name,message:error.message,stack:error.stack}:error;
-    console.error('凭证预览失败',detail);
+    console.error('凭证预览失败',JSON.stringify(detail));
     if(previewSession!==activePreviewSession){releaseUrls();return;}
     modal.innerHTML=`<div class="preview-backdrop"><div class="preview-panel"><button class="preview-close">关闭</button><p class="notice error">${isHeic?'此HEIC凭证暂时无法预览':'凭证暂时无法打开，请刷新后重试'}</p><a class="button-link" href="${originalUrl||'#'}" target="_blank" rel="noopener">打开原文件</a><a class="button-link" href="${originalUrl||'#'}" download>下载原文件</a></div></div>`;
     modal.querySelector('.preview-close').onclick=closePreview;
