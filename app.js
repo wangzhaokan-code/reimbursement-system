@@ -8,6 +8,9 @@ const STATUS_LABELS = { draft:'草稿', submitted:'已提交', returned:'已退�
 const FILE_KINDS = new Set(['image','pdf']);
 const state = { session:null, profile:null, subjects:[], permissions:[], claims:[], people:{users:[],invitations:[]}, mode:'list', selectedClaim:null, message:null, busy:false, dirty:false, saving:false, adminFilters:{subject:'',status:'',claimNumber:'',from:'',to:'',kind:'all',sort:'updated_desc'} };
 const slotSaveTimers = new Map();
+const pendingSlotSaves = new Map();
+let slotSaveQueue = Promise.resolve();
+let editRevision = 0;
 let libheifModulePromise=null;
 let activePreviewSession = 0;
 
@@ -39,6 +42,8 @@ function complete(row){ return Boolean(row.expense_date) && Number.isInteger(Num
 function partial(row){ return Boolean(row.expense_date)!==Boolean(row.amount); }
 function claimFiles(claim){ return claim?.evidence_file||claim?.evidence_files||[]; }
 function stats(claim){ const files=claimFiles(claim); const valid=files.flatMap(f=>rows(f).filter(complete)); return {files:files.filter(f=>!f.deleted_from_draft_at).length,receipts:valid.length,amount:valid.reduce((s,r)=>s+Number(r.amount),0)}; }
+function updateLocalSummary(){ const summary=document.querySelector('.summary'); if(!summary||!state.selectedClaim)return; const s=stats(state.selectedClaim); summary.innerHTML=`<b>完整收据数：${s.receipts}</b><b>总金额：${yen(s.amount)}</b>`; }
+function setSaveState(text){ document.querySelector('#saveState')?.replaceChildren(document.createTextNode(text)); }
 function flash(message,type='ok'){ state.message={message,type}; render(); }
 function messageHtml(){ return state.message?`<div class="notice ${state.message.type==='error'?'error':'ok'}">${esc(state.message.message)}</div>`:''; }
 async function rpc(name,args){ const {data,error}=await supabase.rpc(name,args); if(error){ console.error(name,error); const failure=new Error('操作失败，请刷新后重试'); failure.code=error.code||''; failure.details=error.details||''; failure.serverMessage=error.message||''; throw failure; } return Array.isArray(data)?data[0]||null:data; }
@@ -85,7 +90,7 @@ function render(){ if(!state.session){renderLogin();return;} if(state.mode==='ed
 function renderList(){ const mine=state.claims.filter(c=>c.applicant_user_id===state.session.user.id); const rowsHtml=mine.map(c=>{const s=stats(c);const editable=['draft','returned'].includes(c.status); return `<tr><td>${esc(c.claim_number)}</td><td>${esc(c.expense_subject?.display_name||'—')}</td><td>${s.files}</td><td>${s.receipts}</td><td>${yen(c.total_amount||s.amount)}</td><td>${statusLabel(c.status)}</td><td>${dateTime(c.last_autosaved_at||c.updated_at)}</td><td>${dateTime(c.submitted_at)}</td><td><button data-action="${editable?'edit':'view'}" data-id="${c.id}">${editable?'继续编辑':'查看详情'}</button>${c.status==='draft'?` <button class="danger" data-action="delete" data-id="${c.id}">删除草稿</button>`:''}</td></tr>`;}).join(''); app.innerHTML=`<section class="card"><div class="toolbar"><h1>我的报销</h1><button class="primary" id="newClaim">新建报销</button>${canManageClaims()?'<button id="admin">管理与统计</button>':''}${canManageSystem()?'<button id="system">系统管理</button>':''}</div>${messageHtml()}<p class="muted">这里只显示本人提交的报销；需要处理其他申请时请进入管理与统计。</p><table class="table"><thead><tr><th>申请编号</th><th>主体</th><th>文件数</th><th>收据数</th><th>总金额</th><th>状态</th><th>最近保存</th><th>提交时间</th><th>操作</th></tr></thead><tbody>${rowsHtml||'<tr><td colspan="9">暂无本人申请</td></tr>'}</tbody></table></section>`; document.querySelector('#newClaim').onclick=()=>{state.selectedClaim={draft:true,expense_subject_id:preferredSubjectId(),evidence_file:[]};state.message=null;state.mode='edit';render();}; document.querySelector('#admin')?.addEventListener('click',()=>{state.mode='admin';render();}); document.querySelector('#system')?.addEventListener('click',()=>{state.mode='system';render();}); app.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>handleListAction(b.dataset.action,b.dataset.id))); }
 async function handleListAction(action,id){ const c=state.claims.find(x=>x.id===id); if(!c)return; if(action==='edit'){state.selectedClaim=c;state.mode='edit';state.message=null;render();} else if(action==='view'){state.selectedClaim=c;state.mode='detail';render();} else if(action==='delete'){ const confirmed=await askConfirmation(`确定删除草稿 ${c.claim_number}？文件数${stats(c).files}，收据数${stats(c).receipts}，总额${yen(stats(c).amount)}。`); if(!confirmed)return; try{await deleteDraft(c); await loadSession(); flash('草稿已删除');}catch(error){console.error('delete_reimbursement_draft',error);flash(error.message,'error');} } }
 function renderEditor(){ const c=state.selectedClaim; const subjects=allowedSubjects(); const subjectOptions=subjects.map(s=>`<option value="${s.id}" ${s.id===c.expense_subject_id?'selected':''}>${esc(s.display_name)}</option>`).join(''); const files=claimFiles(c); const fileHtml=files.map((f,fi)=>`<div class="file-card" data-file="${f.id}"><div class="file-head"><b>文件${fi+1}</b><span>${esc(f.original_filename||'')}</span><span class="muted">${statusLabel(f.upload_status||'draft')}</span><span>${f.upload_status==='ready'?'已上传':''}</span><button class="secondary" data-preview-file="${f.id}">查看凭证</button></div>${rows(f).map((r,ri)=>`<div class="slot ${partial(r)?'incomplete':''}"><span>第${ri+1}行</span><label class="slot-date">日期 <input type="date" data-file-id="${f.id}" data-slot-index="${ri+1}" data-slot-date value="${esc(r.expense_date||'')}"></label><label class="slot-amount">金额（日元） <input type="text" inputmode="numeric" pattern="[0-9]*" data-file-id="${f.id}" data-slot-index="${ri+1}" data-slot-amount placeholder="请输入日币金额" value="${esc(r.amount||'')}"></label><label class="slot-note">备注 <input type="text" data-file-id="${f.id}" data-slot-index="${ri+1}" data-slot-note placeholder="可填写用途或说明" value="${esc(r.note||'')}"></label></div>`).join('')}</div>`).join(''); const submit= c.id&&c.status==='returned'||c.id&&c.status==='draft'; const locked=c.id&&!['draft','returned'].includes(c.status); app.innerHTML=`<section class="card"><div class="toolbar"><button id="back">返回我的报销</button><h1>${c.id?esc(c.claim_number):'新建报销'}</h1><span class="muted" id="saveState">${c.id?'已加载':'首次有效编辑时创建草稿'}</span></div>${messageHtml()}<label>费用归属主体 <select id="subject" ${locked?'disabled':''}>${subjectOptions||'<option>没有可用主体权限</option>'}</select></label><hr><label>上传凭证（每批最多5个文件） <input id="files" type="file" accept="image/jpeg,image/png,image/heic,image/heif,application/pdf" multiple ${locked?'disabled':''}></label><p class="muted upload-instruction">上传说明：单次最多上传 5 个照片或 PDF 文件；每个文件最多录入 5 张收据（以 1 张 A4 纸可放下为准），单次最多录入 25 条收据数据。</p><div id="fileList">${fileHtml||'<p class="muted">尚未上传文件。</p>'}</div><div class="summary"><b>完整收据数：${stats(c).receipts}</b><b>总金额：${yen(stats(c).amount)}</b></div><div class="actions">${submit?'<button class="primary" id="submit">提交审核</button>':''}<button id="clear">清空本地编辑</button></div><div id="previewModal" class="preview-modal" hidden></div></section>`; bindEditor(); app.querySelectorAll('[data-preview-file]').forEach(b=>b.addEventListener('click',()=>previewEvidence(files.find(f=>f.id===b.dataset.previewFile)))); bindEvidenceActions(); }
-function bindEditor(){ document.querySelector('#back').onclick=async()=>{await new Promise(resolve=>setTimeout(resolve,500));await saveCurrent(false);state.mode='list';await loadSession();render();}; document.querySelector('#clear').onclick=()=>{for(const timer of slotSaveTimers.values())clearTimeout(timer);slotSaveTimers.clear();state.dirty=false;state.saving=false;state.selectedClaim={draft:true,expense_subject_id:preferredSubjectId(),evidence_file:[]};render();}; document.querySelector('#subject')?.addEventListener('change',async e=>{state.dirty=true;state.selectedClaim.expense_subject_id=e.target.value;await saveCurrent(true);renderEditor();}); document.querySelector('#files')?.addEventListener('change',onFiles); app.querySelectorAll('[data-slot-date],[data-slot-amount],[data-slot-note]').forEach(input=>input.addEventListener('input',e=>{const f=claimFiles(state.selectedClaim).find(x=>x.id===e.target.dataset.fileId); if(!f)return; const slotRows=rows(f); const r=slotRows[Number(e.target.dataset.slotIndex)-1]; if(e.target.hasAttribute('data-slot-date'))r.expense_date=e.target.value; else if(e.target.hasAttribute('data-slot-amount'))r.amount=e.target.value===''?'':Math.max(0,Math.trunc(Number(e.target.value))); else r.note=e.target.value; f.draft_slots=slotRows;state.dirty=true;scheduleSlotSave(f);})); document.querySelector('#submit')?.addEventListener('click',submitCurrent); }
+function bindEditor(){ document.querySelector('#back').onclick=async()=>{await flushPendingSlotSaves();await saveCurrent(false);state.mode='list';await loadSession();render();}; document.querySelector('#clear').onclick=()=>{for(const timer of slotSaveTimers.values())clearTimeout(timer);slotSaveTimers.clear();pendingSlotSaves.clear();state.dirty=false;state.saving=false;state.selectedClaim={draft:true,expense_subject_id:preferredSubjectId(),evidence_file:[]};render();}; document.querySelector('#subject')?.addEventListener('change',async e=>{state.dirty=true;state.selectedClaim.expense_subject_id=e.target.value;await saveCurrent(true);renderEditor();}); document.querySelector('#files')?.addEventListener('change',onFiles); app.querySelectorAll('[data-slot-date],[data-slot-amount],[data-slot-note]').forEach(input=>input.addEventListener('input',e=>{const f=claimFiles(state.selectedClaim).find(x=>x.id===e.target.dataset.fileId); if(!f)return; const slotRows=rows(f); const r=slotRows[Number(e.target.dataset.slotIndex)-1]; if(e.target.hasAttribute('data-slot-date'))r.expense_date=e.target.value; else if(e.target.hasAttribute('data-slot-amount'))r.amount=e.target.value===''?'':Math.max(0,Math.trunc(Number(e.target.value))); else r.note=e.target.value; f.draft_slots=slotRows;state.dirty=true;editRevision+=1;updateLocalSummary();scheduleSlotSave(f);})); document.querySelector('#submit')?.addEventListener('click',submitCurrent); }
 async function ensureDraft(){ if(state.selectedClaim.id)return true; if(!state.selectedClaim.expense_subject_id){flash('请选择费用归属主体','error');return false;} const created=await rpc('create_reimbursement_draft',{p_draft_creation_key:uuid(),p_expense_subject_id:state.selectedClaim.expense_subject_id}); state.selectedClaim={...state.selectedClaim,...created,evidence_file:[]}; return true; }
 async function saveCurrent(allowCreate=true){
   if(state.busy)return;
@@ -123,16 +128,24 @@ async function saveCurrent(allowCreate=true){
 
 async function saveFileSlots(file){
   if(!state.selectedClaim?.id || !file?.id)return;
+  const revisionAtStart=editRevision;
   await saveCurrent();
-  await rpc('autosave_evidence_draft_slots',{
+  state.saving=true;
+  const result=await rpc('autosave_evidence_draft_slots',{
     p_evidence_file_id:file.id,
     p_expected_claim_version:state.selectedClaim.version,
     p_draft_slots:rows(file)
   });
-  await loadSession();
-  state.selectedClaim=state.claims.find(x=>x.id===state.selectedClaim.id)||state.selectedClaim;
-  state.dirty=false;
+  const returnedVersion=Number(result?.claim_version??result?.version);
+  if(Number.isInteger(returnedVersion)&&returnedVersion>0)state.selectedClaim.version=returnedVersion;
+  else {
+    const latest=await supabase.from('reimbursement_claim').select('version,total_amount,last_autosaved_at,updated_at').eq('id',state.selectedClaim.id).single();
+    if(!latest.error&&latest.data){state.selectedClaim={...state.selectedClaim,...latest.data};}
+  }
+  if(editRevision===revisionAtStart){state.dirty=false;}
   state.saving=false;
+  updateLocalSummary();
+  setSaveState(`已自动保存 ${new Date().toLocaleTimeString()}`);
 }
 
 function canMutateEvidence(claim){
@@ -143,6 +156,7 @@ async function deleteEvidenceFile(claim,file){
   const ok=await askConfirmation(`确定删除凭证“${file.original_filename||'未命名文件'}”？该文件下已填写的收据数据也会一起删除，但不影响本报销中的其他文件。`);
   if(!ok)return;
   try{
+    await flushPendingSlotSaves();
     const latest=state.claims.find(item=>item.id===claim.id)||claim;
     await rpc('delete_reimbursement_evidence_file',{p_claim_id:latest.id,p_evidence_file_id:file.id,p_expected_version:latest.version});
     await loadSession();
@@ -163,6 +177,7 @@ async function replaceEvidenceFile(claim,file,input){
   if(!FILE_KINDS.has(kind)){flash('仅支持 JPG、JPEG、PNG、HEIC/HEIF 或 PDF','error');return;}
   if(!await askConfirmation(`确定用“${replacement.name}”替换“${file.original_filename||'未命名文件'}”？已填写的收据信息将保留。`))return;
   try{
+    await flushPendingSlotSaves();
     let latest=state.claims.find(item=>item.id===claim.id)||claim;
     const reserved=await rpc('reserve_evidence_file_upload',{p_claim_id:latest.id,p_expected_version:latest.version,p_original_filename:replacement.name,p_declared_mime_type:replacement.type||'application/octet-stream',p_declared_file_size:replacement.size,p_extension:ext,p_file_kind:kind});
     const bucket=reserved.storage_bucket||'reimbursement-evidence';
@@ -209,23 +224,28 @@ function scheduleSlotSave(file){
   const key=`${state.selectedClaim?.id}:${file.id}`;
   const existing=slotSaveTimers.get(key);
   if(existing)clearTimeout(existing);
-  const timer=setTimeout(async()=>{
-    slotSaveTimers.delete(key);
-    state.saving=true;
-    try{
-      await saveFileSlots(file);
-      if(state.mode==='edit')renderEditor();
-    }catch(err){
-      console.error(err);
-      state.dirty=true;
-      state.saving=false;
-      flash('保存失败，请刷新后重试','error');
-    }
-  },400);
+  const oldPending=pendingSlotSaves.get(key); if(oldPending)oldPending.resolve();
+  let resolvePending,rejectPending;
+  const promise=new Promise((resolve,reject)=>{resolvePending=resolve;rejectPending=reject;});
+  promise.catch(()=>{});
+  const entry={file,promise,resolve:resolvePending,reject:rejectPending};
+  pendingSlotSaves.set(key,entry);
+  const timer=setTimeout(()=>{slotSaveTimers.delete(key);enqueueSlotSave(key,entry);},900);
   slotSaveTimers.set(key,timer);
+  return promise;
 }
-async function onFiles(e){ const chosen=[...e.target.files]; e.target.value=''; if(chosen.length>5){flash('每批最多选择5个文件，可分批继续添加','error');return;} if(!(await ensureDraft()))return; for(const file of chosen){const ext=(file.name.split('.').pop()||'').toLowerCase();const kind=ext==='pdf'?'pdf':'image';if(!FILE_KINDS.has(kind))continue; try{const reserved=await rpc('reserve_evidence_file_upload',{p_claim_id:state.selectedClaim.id,p_expected_version:state.selectedClaim.version,p_original_filename:file.name,p_declared_mime_type:file.type||'application/octet-stream',p_declared_file_size:file.size,p_extension:ext,p_file_kind:kind}); const path=reserved.storage_path; const up=await supabase.storage.from(reserved.storage_bucket||'reimbursement-evidence').upload(path,file,{contentType:file.type||'application/octet-stream',upsert:false}); if(up.error)throw up.error; const completed=await rpc('complete_evidence_file_upload',{p_evidence_file_id:reserved.evidence_file_id,p_actual_mime_type:file.type,p_actual_file_size:file.size,p_actual_file_kind:kind}); state.selectedClaim.evidence_file=[...(state.selectedClaim.evidence_file||[]),{...completed,draft_slots:[]}]; state.selectedClaim.version=reserved.claim_version||state.selectedClaim.version; }catch(err){console.error(err);flash('文件上传失败，请重试','error');} } await loadSession(); state.selectedClaim=state.claims.find(x=>x.id===state.selectedClaim.id)||state.selectedClaim;state.mode='edit';render(); }
-async function submitCurrent(){ const c=state.selectedClaim; const files=claimFiles(c); if(!c.expense_subject_id||!files.length){flash('请先选择主体并上传至少一个文件','error');return;} for(const f of files){const rs=rows(f);if(rs.some(partial)){flash('请完整填写日期和金额，或清空该行','error');return;}if(!rs.some(complete)){flash('每个文件至少填写一条完整日期和金额','error');return;}if(f.upload_status!=='ready'){flash('凭证仍在上传或上传失败，暂不能提交','error');return;}} if(!await askConfirmation('确认提交审核？提交后文件和收据将被锁定。'))return; try{let current=state.claims.find(claim=>claim.id===c.id)||c; try{await rpc('submit_reimbursement_claim',{p_claim_id:current.id,p_expected_version:current.version});}catch(error){if(!isVersionConflict(error))throw error; current=await reloadClaimVersion(c.id); if(!current||!['draft','returned'].includes(current.status))throw error; await rpc('submit_reimbursement_claim',{p_claim_id:current.id,p_expected_version:current.version});} state.selectedClaim=current;state.dirty=false;state.saving=false;await loadSession();state.mode='list';flash('申请已提交');}catch(e){console.error('submit_reimbursement_claim',e);flash(e.message,'error');} }
+function enqueueSlotSave(key,entry){
+  if(pendingSlotSaves.get(key)===entry)pendingSlotSaves.delete(key);
+  slotSaveQueue=slotSaveQueue.then(async()=>{try{await saveFileSlots(entry.file);entry.resolve();}catch(error){console.error('autosave_evidence_draft_slots',error);state.dirty=true;state.saving=false;setSaveState('保存失败，请刷新后重试');entry.reject(error);}});
+  return slotSaveQueue;
+}
+async function flushPendingSlotSaves(){
+  const entries=[...pendingSlotSaves.entries()];
+  for(const [key,entry] of entries){const timer=slotSaveTimers.get(key);if(timer)clearTimeout(timer);slotSaveTimers.delete(key);enqueueSlotSave(key,entry);}
+  await slotSaveQueue;
+}
+async function onFiles(e){ const chosen=[...e.target.files]; e.target.value=''; if(chosen.length>5){flash('每批最多选择5个文件，可分批继续添加','error');return;} await flushPendingSlotSaves(); if(!(await ensureDraft()))return; for(const file of chosen){const ext=(file.name.split('.').pop()||'').toLowerCase();const kind=ext==='pdf'?'pdf':'image';if(!FILE_KINDS.has(kind))continue; try{const reserved=await rpc('reserve_evidence_file_upload',{p_claim_id:state.selectedClaim.id,p_expected_version:state.selectedClaim.version,p_original_filename:file.name,p_declared_mime_type:file.type||'application/octet-stream',p_declared_file_size:file.size,p_extension:ext,p_file_kind:kind}); const path=reserved.storage_path; const up=await supabase.storage.from(reserved.storage_bucket||'reimbursement-evidence').upload(path,file,{contentType:file.type||'application/octet-stream',upsert:false}); if(up.error)throw up.error; const completed=await rpc('complete_evidence_file_upload',{p_evidence_file_id:reserved.evidence_file_id,p_actual_mime_type:file.type,p_actual_file_size:file.size,p_actual_file_kind:kind}); state.selectedClaim.evidence_file=[...(state.selectedClaim.evidence_file||[]),{...completed,draft_slots:[]}]; state.selectedClaim.version=reserved.claim_version||state.selectedClaim.version; }catch(err){console.error(err);flash('文件上传失败，请重试','error');} } await loadSession(); state.selectedClaim=state.claims.find(x=>x.id===state.selectedClaim.id)||state.selectedClaim;state.mode='edit';render(); }
+async function submitCurrent(){ await flushPendingSlotSaves(); const c=state.selectedClaim; const files=claimFiles(c); if(!c.expense_subject_id||!files.length){flash('请先选择主体并上传至少一个文件','error');return;} for(const f of files){const rs=rows(f);if(rs.some(partial)){flash('请完整填写日期和金额，或清空该行','error');return;}if(!rs.some(complete)){flash('每个文件至少填写一条完整日期和金额','error');return;}if(f.upload_status!=='ready'){flash('凭证仍在上传或上传失败，暂不能提交','error');return;}} if(!await askConfirmation('确认提交审核？提交后文件和收据将被锁定。'))return; try{let current=state.claims.find(claim=>claim.id===c.id)||c; try{await rpc('submit_reimbursement_claim',{p_claim_id:current.id,p_expected_version:current.version});}catch(error){if(!isVersionConflict(error))throw error; current=await reloadClaimVersion(c.id); if(!current||!['draft','returned'].includes(current.status))throw error; await rpc('submit_reimbursement_claim',{p_claim_id:current.id,p_expected_version:current.version});} state.selectedClaim=current;state.dirty=false;state.saving=false;await loadSession();state.mode='list';flash('申请已提交');}catch(e){console.error('submit_reimbursement_claim',e);flash(e.message,'error');} }
 function renderDetail(){ const c=state.selectedClaim,s=stats(c);const files=claimFiles(c);app.innerHTML=`<section class="card"><div class="toolbar"><button id="back">返回我的报销</button><h1>申请详情 ${esc(c.claim_number)}</h1></div>${messageHtml()}<p><b>${esc(c.expense_subject?.display_name||'—')}</b>｜状态：<b>${statusLabel(c.status)}</b>｜文件${s.files}｜收据${s.receipts}｜总额${yen(c.total_amount||s.amount)}</p><p>申请人：<b>${esc(personName(c.applicant_user_id))}</b></p><p>提交时间：${dateTime(c.submitted_at)}</p><table class="table"><thead><tr><th>文件</th><th>序号</th><th>日期</th><th>金额</th><th>备注</th><th>凭证</th></tr></thead><tbody>${files.flatMap(f=>rows(f).filter(complete).map(r=>`<tr><td>${esc(f.original_filename)}</td><td>${r.slot_index}</td><td>${esc(r.expense_date)}</td><td>${yen(r.amount)}</td><td>${esc(r.note||'—')}</td><td><button data-preview-file="${f.id}">查看凭证</button></td></tr>`)).join('')||'<tr><td colspan="6">暂无有效收据</td></tr>'}</tbody></table><div class="actions"><button id="claimPdf">下载单申请PDF</button></div><div class="actions" id="detailActions"></div><div id="previewModal" class="preview-modal" hidden></div></section>`;document.querySelector('#back').onclick=()=>{state.mode='list';render();};document.querySelector('#claimPdf').onclick=()=>downloadClaimPdf(c);app.querySelectorAll('[data-preview-file]').forEach(b=>b.addEventListener('click',()=>previewEvidence(files.find(f=>f.id===b.dataset.previewFile))));const actions=document.querySelector('#detailActions');if(['submitted','returned'].includes(c.status)&&c.applicant_user_id===state.session.user.id)actions.innerHTML='<button id="withdraw" class="danger">撤回申请</button>'; if(c.status==='paid')actions.innerHTML+='<button id="increase">创建增加更正</button><button id="decrease">创建减少更正</button>';document.querySelector('#withdraw')?.addEventListener('click',()=>runWithdraw(c));document.querySelector('#increase')?.addEventListener('click',()=>createCorrection(c,'increase'));document.querySelector('#decrease')?.addEventListener('click',()=>createCorrection(c,'decrease')); }
 async function runWithdraw(c){if(!await askConfirmation('确认撤回申请？撤回后将回到草稿状态，可继续编辑、提交或删除。'))return;try{await rpc('withdraw_reimbursement_claim',{p_claim_id:c.id,p_expected_version:c.version,p_reason:null});await loadSession();state.mode='list';flash('申请已撤回并转为草稿');}catch(e){flash(e.message,'error');}}
 async function createCorrection(c,direction){const amount=prompt('请输入正整数更正金额');const reason=prompt('请输入更正原因');if(!/^\d+$/.test(amount||'')||Number(amount)<=0||!reason?.trim()){flash('更正金额和原因必填','error');return;}try{await rpc('create_reimbursement_correction',{p_original_claim_id:c.id,p_expected_original_version:c.version,p_correction_creation_key:uuid(),p_correction_direction:direction,p_correction_amount:Number(amount),p_correction_reason:reason.trim()});await loadSession();state.mode='list';flash('更正申请已创建');}catch(e){flash(e.message,'error');}}
