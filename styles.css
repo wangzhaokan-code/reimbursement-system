@@ -31,3 +31,11 @@
   .slot-date,.slot-amount,.slot-note{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px;align-items:center;width:100%;min-width:0;}
   .slot-date input[type=date],.slot-amount input[data-slot-amount],.slot-note input{width:100%;max-width:none;min-width:0;}
 }
+
+/* Credential actions share one compact operation area and one button treatment. */
+.file-actions{display:flex;align-items:center;justify-content:flex-start;gap:8px;flex-wrap:wrap;min-width:0;}
+.file-actions .file-action{min-width:88px;white-space:nowrap;text-align:center;}
+@media (max-width:760px){
+  .file-actions{width:100%;gap:8px;}
+  .file-actions .file-action{flex:0 0 auto;}
+}

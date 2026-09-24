@@ -188,16 +188,19 @@ function bindEvidenceActions(){
     const card=document.querySelector(`[data-file="${CSS.escape(file.id)}"]`);
     const head=card?.querySelector('.file-head');
     if(!head||head.querySelector('[data-delete-evidence]'))return;
+    const actions=document.createElement('span');
+    actions.className='file-actions';
     const del=document.createElement('button');
-    del.type='button';del.className='danger';del.textContent='删除凭证';del.dataset.deleteEvidence=file.id;
+    del.type='button';del.className='secondary file-action';del.textContent='删除凭证';del.dataset.deleteEvidence=file.id;
     del.addEventListener('click',()=>deleteEvidenceFile(claim,file));
     const replace=document.createElement('button');
-    replace.type='button';replace.className='secondary';replace.textContent='修改凭证';
+    replace.type='button';replace.className='secondary file-action';replace.textContent='修改凭证';
     const input=document.createElement('input');
     input.type='file';input.accept='image/jpeg,image/png,image/heic,image/heif,application/pdf';input.hidden=true;
     input.addEventListener('change',()=>replaceEvidenceFile(claim,file,input));
     replace.addEventListener('click',()=>input.click());
-    head.append(del,replace,input);
+    actions.append(del,replace);
+    head.append(actions,input);
   });
 }
 function scheduleSlotSave(file){
