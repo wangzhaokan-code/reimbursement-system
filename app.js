@@ -190,6 +190,7 @@ function bindEvidenceActions(){
     if(!head||head.querySelector('[data-delete-evidence]'))return;
     const actions=document.createElement('span');
     actions.className='file-actions';
+    const preview=head.querySelector('[data-preview-file]');
     const del=document.createElement('button');
     del.type='button';del.className='secondary file-action';del.textContent='删除凭证';del.dataset.deleteEvidence=file.id;
     del.addEventListener('click',()=>deleteEvidenceFile(claim,file));
@@ -199,6 +200,7 @@ function bindEvidenceActions(){
     input.type='file';input.accept='image/jpeg,image/png,image/heic,image/heif,application/pdf';input.hidden=true;
     input.addEventListener('change',()=>replaceEvidenceFile(claim,file,input));
     replace.addEventListener('click',()=>input.click());
+    if(preview)actions.append(preview);
     actions.append(del,replace);
     head.append(actions,input);
   });

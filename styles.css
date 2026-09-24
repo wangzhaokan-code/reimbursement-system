@@ -33,9 +33,11 @@
 }
 
 /* Credential actions share one compact operation area and one button treatment. */
-.file-actions{display:flex;align-items:center;justify-content:flex-start;gap:8px;flex-wrap:wrap;min-width:0;}
-.file-actions .file-action{min-width:88px;white-space:nowrap;text-align:center;}
+.file-head{grid-template-columns:80px minmax(0,1fr) 110px 90px auto;}
+.file-actions{display:flex;align-items:center;justify-content:flex-start;gap:8px;flex-wrap:nowrap;min-width:0;width:max-content;max-width:100%;}
+.file-actions button{min-width:88px;white-space:nowrap;text-align:center;}
 @media (max-width:760px){
-  .file-actions{width:100%;gap:8px;}
-  .file-actions .file-action{flex:0 0 auto;}
+  .file-head{display:grid;grid-template-columns:minmax(0,1fr);}
+  .file-actions{width:100%;max-width:100%;gap:8px;flex-wrap:wrap;}
+  .file-actions button{flex:0 0 auto;}
 }
