@@ -17,3 +17,17 @@
 @media(max-width:900px) and (min-width:761px){.slot{grid-template-columns:65px 180px 255px minmax(180px,1fr)}.slot-date{grid-template-columns:max-content 145px}.slot-amount{grid-template-columns:max-content 170px}.slot-date input[type=date]{width:145px}.slot-amount input[data-slot-amount]{width:170px}}
 .subject-form{align-items:stretch}.subject-form label{display:flex;flex-direction:column;gap:4px;min-width:170px;color:#173b57;font-size:14px}.subject-form input,.subject-form select{min-height:36px;padding:6px}.subject-form small{color:#65727d;font-size:12px;max-width:220px}.subject-form-actions{display:flex;gap:10px;align-items:end;padding-top:18px}@media(max-width:760px){.subject-form label{min-width:100%}.subject-form-actions{padding-top:0}}
 .reason-modal{position:fixed;inset:0;z-index:20;display:grid;place-items:center;background:rgba(15,32,48,.35);padding:1rem}.reason-dialog{width:min(420px,100%);background:#fff;border:1px solid #b9c9d8;border-radius:10px;padding:1.25rem;box-shadow:0 12px 36px rgba(15,32,48,.24)}.reason-dialog h3{margin:0 0 1rem}.reason-dialog label{display:grid;gap:.4rem}.reason-dialog textarea{width:100%;box-sizing:border-box;resize:vertical;padding:.65rem;border:1px solid #8ea5b9;border-radius:5px;font:inherit}.reason-dialog .actions{display:flex;justify-content:flex-end;gap:.6rem;margin-top:1rem}
+
+/* Final mobile override: this comes after the desktop grid rules. */
+@media (max-width:760px){
+  html,main{max-width:100%;}
+  .card,.file-card{width:100%;max-width:100%;}
+  .file-head{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;width:100%;margin-bottom:10px;}
+  .file-head>*{min-width:0;max-width:100%;}
+  .file-head>span{overflow-wrap:anywhere;white-space:normal;}
+  .file-head button{justify-self:start;}
+  .slot{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;width:100%;min-width:0;padding:10px 0;}
+  .slot>span{display:block;}
+  .slot-date,.slot-amount,.slot-note{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px;align-items:center;width:100%;min-width:0;}
+  .slot-date input[type=date],.slot-amount input[data-slot-amount],.slot-note input{width:100%;max-width:none;min-width:0;}
+}
