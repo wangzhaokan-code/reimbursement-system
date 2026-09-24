@@ -131,11 +131,24 @@ async function saveFileSlots(file){
   const revisionAtStart=editRevision;
   await saveCurrent();
   state.saving=true;
-  const result=await rpc('autosave_evidence_draft_slots',{
-    p_evidence_file_id:file.id,
-    p_expected_claim_version:state.selectedClaim.version,
-    p_draft_slots:rows(file)
-  });
+  let result;
+  try {
+    result=await rpc('autosave_evidence_draft_slots',{
+      p_evidence_file_id:file.id,
+      p_expected_claim_version:state.selectedClaim.version,
+      p_draft_slots:rows(file)
+    });
+  } catch (error) {
+    if(!isVersionConflict(error))throw error;
+    const latest=await supabase.from('reimbursement_claim').select('version,total_amount,last_autosaved_at,updated_at').eq('id',state.selectedClaim.id).single();
+    if(latest.error||!latest.data)throw error;
+    state.selectedClaim={...state.selectedClaim,...latest.data};
+    result=await rpc('autosave_evidence_draft_slots',{
+      p_evidence_file_id:file.id,
+      p_expected_claim_version:state.selectedClaim.version,
+      p_draft_slots:rows(file)
+    });
+  }
   const returnedVersion=Number(result?.claim_version??result?.version);
   if(Number.isInteger(returnedVersion)&&returnedVersion>0)state.selectedClaim.version=returnedVersion;
   else {
